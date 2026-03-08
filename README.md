@@ -9,7 +9,7 @@ A status line for [Claude Code](https://docs.anthropic.com/en/docs/claude-code) 
 Run the command below to set it up
 
 ```bash
-npx claude-line
+npx @kamranahmedse/claude-statusline
 ```
 
 It backups your old status line if any and copies the status line script to `~/.claude/statusline.sh` and configures your Claude Code settings.
@@ -29,7 +29,7 @@ brew install jq
 ## Uninstall
 
 ```bash
-npx claude-line --uninstall
+npx @kamranahmedse/claude-statusline --uninstall
 ```
 
 If you had a previous statusline, it restores it from the backup. Otherwise it removes the script and cleans up your settings.
