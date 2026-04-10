@@ -130,6 +130,60 @@ if [ -f "$settings_path" ]; then
     effort=$(jq -r '.effortLevel // "default"' "$settings_path" 2>/dev/null)
 fi
 
+# ── Active account email (cached) ──────────────────────
+account_email=""
+profile_cache="/tmp/claude/statusline-profile-cache.json"
+profile_cache_max_age=300
+
+_needs_profile_refresh=true
+if [ -f "$profile_cache" ]; then
+    profile_mtime=$(stat -c %Y "$profile_cache" 2>/dev/null || stat -f %m "$profile_cache" 2>/dev/null || echo 0)
+    profile_age=$(( $(date +%s) - profile_mtime ))
+    if [ "$profile_age" -lt "$profile_cache_max_age" ]; then
+        _needs_profile_refresh=false
+    fi
+fi
+
+if $_needs_profile_refresh; then
+    _profile_token=""
+    if [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ]; then
+        _profile_token="$CLAUDE_CODE_OAUTH_TOKEN"
+    elif command -v security >/dev/null 2>&1; then
+        _profile_blob=$(security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null)
+        if [ -n "$_profile_blob" ]; then
+            _profile_token=$(echo "$_profile_blob" | jq -r '.claudeAiOauth.accessToken // empty' 2>/dev/null)
+        fi
+    fi
+    if [ -z "$_profile_token" ] || [ "$_profile_token" = "null" ]; then
+        _profile_creds="${HOME}/.claude/.credentials.json"
+        if [ -f "$_profile_creds" ]; then
+            _profile_token=$(jq -r '.claudeAiOauth.accessToken // empty' "$_profile_creds" 2>/dev/null)
+        fi
+    fi
+    if [ -z "$_profile_token" ] || [ "$_profile_token" = "null" ]; then
+        if command -v secret-tool >/dev/null 2>&1; then
+            _profile_blob=$(timeout 2 secret-tool lookup service "Claude Code-credentials" 2>/dev/null)
+            if [ -n "$_profile_blob" ]; then
+                _profile_token=$(echo "$_profile_blob" | jq -r '.claudeAiOauth.accessToken // empty' 2>/dev/null)
+            fi
+        fi
+    fi
+
+    if [ -n "$_profile_token" ] && [ "$_profile_token" != "null" ]; then
+        _profile_response=$(curl -sf --max-time 3 \
+            -H "Authorization: Bearer $_profile_token" \
+            -H "anthropic-beta: oauth-2025-04-20" \
+            "https://api.anthropic.com/api/oauth/profile" 2>/dev/null)
+        if [ -n "$_profile_response" ] && echo "$_profile_response" | jq -e '.account.email' >/dev/null 2>&1; then
+            echo "$_profile_response" > "$profile_cache"
+        fi
+    fi
+fi
+
+if [ -f "$profile_cache" ]; then
+    account_email=$(jq -r '.account.email // empty' "$profile_cache" 2>/dev/null)
+fi
+
 # ── LINE 1: Model │ Context % │ Directory (branch) │ Session │ Effort ──
 pct_color=$(color_for_pct "$pct_used")
 cwd=$(echo "$input" | jq -r '.cwd // ""')
@@ -169,6 +223,10 @@ if [[ "$parent_cmd" == *"--dangerously-skip-permissions"* ]]; then
 fi
 
 line1="${blue}${model_name}${reset}"
+if [ -n "$account_email" ]; then
+    line1+="${sep}"
+    line1+="${dim}${account_email}${reset}"
+fi
 line1+="${sep}"
 line1+="✍️ ${pct_color}${pct_used}%${reset}"
 line1+="${sep}"
