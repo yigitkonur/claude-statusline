@@ -76,6 +76,26 @@ format_epoch_time() {
     printf "%s" "$result"
 }
 
+format_countdown() {
+    local epoch=$1
+    [ -z "$epoch" ] || [ "$epoch" = "null" ] || [ "$epoch" = "0" ] && return
+    [[ "$epoch" =~ ^[0-9]+$ ]] || return
+    local now_epoch
+    now_epoch=$(date +%s)
+    local remaining=$(( epoch - now_epoch ))
+    [ "$remaining" -le 0 ] && { printf "now"; return; }
+    local days=$(( remaining / 86400 ))
+    local hours=$(( (remaining % 86400) / 3600 ))
+    local mins=$(( (remaining % 3600) / 60 ))
+    if [ "$days" -gt 0 ]; then
+        printf "in %dd%dh" "$days" "$hours"
+    elif [ "$hours" -gt 0 ]; then
+        printf "in %dh%02dm" "$hours" "$mins"
+    else
+        printf "in %dm" "$mins"
+    fi
+}
+
 iso_to_epoch() {
     local iso_str="$1"
 
@@ -287,49 +307,55 @@ else
     fi
 fi
 
-# ── Rate limit lines ────────────────────────────────────
+# ── Rate limit line (current + weekly on same row) ──────
 rate_lines=""
 bar_width=10
 
 if [ -n "$five_hour_pct" ]; then
     five_hour_reset=$(format_epoch_time "$five_hour_reset_epoch" "time")
+    five_hour_countdown=$(format_countdown "$five_hour_reset_epoch")
     five_hour_bar=$(build_bar "$five_hour_pct" "$bar_width")
     five_hour_pct_color=$(color_for_pct "$five_hour_pct")
     five_hour_pct_fmt=$(printf "%3d" "$five_hour_pct")
 
     rate_lines+="${white}current${reset} ${five_hour_bar} ${five_hour_pct_color}${five_hour_pct_fmt}%${reset}"
-    [ -n "$five_hour_reset" ] && rate_lines+=" ${dim}⟳${reset} ${white}${five_hour_reset}${reset}"
+    if [ -n "$five_hour_reset" ]; then
+        rate_lines+=" ${dim}⟳${reset} ${white}${five_hour_reset}${reset}"
+        [ -n "$five_hour_countdown" ] && rate_lines+=" ${dim}(${five_hour_countdown})${reset}"
+    fi
 fi
 
 if [ -n "$seven_day_pct" ]; then
     seven_day_reset=$(format_epoch_time "$seven_day_reset_epoch" "datetime")
+    seven_day_countdown=$(format_countdown "$seven_day_reset_epoch")
     seven_day_bar=$(build_bar "$seven_day_pct" "$bar_width")
     seven_day_pct_color=$(color_for_pct "$seven_day_pct")
     seven_day_pct_fmt=$(printf "%3d" "$seven_day_pct")
 
-    [ -n "$rate_lines" ] && rate_lines+="\n"
-    rate_lines+="${white}weekly${reset}  ${seven_day_bar} ${seven_day_pct_color}${seven_day_pct_fmt}%${reset}"
-    [ -n "$seven_day_reset" ] && rate_lines+=" ${dim}⟳${reset} ${white}${seven_day_reset}${reset}"
+    [ -n "$rate_lines" ] && rate_lines+="${sep}"
+    rate_lines+="${white}weekly${reset} ${seven_day_bar} ${seven_day_pct_color}${seven_day_pct_fmt}%${reset}"
+    if [ -n "$seven_day_reset" ]; then
+        rate_lines+=" ${dim}⟳${reset} ${white}${seven_day_reset}${reset}"
+        [ -n "$seven_day_countdown" ] && rate_lines+=" ${dim}(${seven_day_countdown})${reset}"
+    fi
 fi
 
-if [ "$extra_enabled" = "true" ] && [ -n "$usage_data" ]; then
-    extra_pct=$(echo "$usage_data" | jq -r '.extra_usage.utilization // 0' | awk '{printf "%.0f", $1}')
-    extra_used=$(echo "$usage_data" | jq -r '.extra_usage.used_credits // 0' | awk '{printf "%.2f", $1/100}')
-    extra_limit=$(echo "$usage_data" | jq -r '.extra_usage.monthly_limit // 0' | awk '{printf "%.2f", $1/100}')
-    extra_bar=$(build_bar "$extra_pct" "$bar_width")
-    extra_pct_color=$(color_for_pct "$extra_pct")
-
-    extra_reset=$(date -v+1m -v1d +"%b %-d" 2>/dev/null | tr '[:upper:]' '[:lower:]')
-    if [ -z "$extra_reset" ]; then
-        extra_reset=$(date -d "$(date +%Y-%m-01) +1 month" +"%b %-d" 2>/dev/null | tr '[:upper:]' '[:lower:]')
-    fi
-
-    [ -n "$rate_lines" ] && rate_lines+="\n"
-    rate_lines+="${white}extra${reset}   ${extra_bar} ${extra_pct_color}\$${extra_used}${dim}/${reset}${white}\$${extra_limit}${reset} ${dim}⟳${reset} ${white}${extra_reset}${reset}"
+# ── Context bar (100 chars = 100×10K = 1M) ──────────────
+ctx_bar_width=88
+if [ "$size" -gt 0 ]; then
+    ctx_filled=$(( current * ctx_bar_width / size ))
+    [ "$ctx_filled" -gt "$ctx_bar_width" ] && ctx_filled=$ctx_bar_width
+    [ "$ctx_filled" -lt 0 ] && ctx_filled=0
+    ctx_empty=$(( ctx_bar_width - ctx_filled ))
+    ctx_filled_str="" ctx_empty_str=""
+    for ((i=0; i<ctx_filled; i++)); do ctx_filled_str+="●"; done
+    for ((i=0; i<ctx_empty; i++)); do ctx_empty_str+="○"; done
+    ctx_bar="${white}context${reset} \033[38;2;140;140;140m${ctx_filled_str}\033[38;2;60;60;60m${ctx_empty_str}${reset}"
 fi
 
 # ── Output ──────────────────────────────────────────────
 printf "%b" "$line1"
-[ -n "$rate_lines" ] && printf "\n\n%b" "$rate_lines"
+[ -n "$rate_lines" ] && printf "\n%b" "$rate_lines"
+[ -n "$ctx_bar" ] && printf "\n%b" "$ctx_bar"
 
 exit 0
